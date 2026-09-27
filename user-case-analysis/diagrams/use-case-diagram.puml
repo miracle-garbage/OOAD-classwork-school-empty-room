@@ -1,0 +1,99 @@
+@startuml 用况图-校园空教室预约管理系统
+skinparam defaultFontName "Microsoft YaHei"
+' ============================================================
+' 需求模型 · 用况图（Use Case Diagram）
+' 系统：校园空教室预约管理系统（CFRMS）
+' 说明：10 个参与者、17 个用况，含 include / extend / 参与者泛化关系
+' ============================================================
+left to right direction
+skinparam packageStyle rectangle
+skinparam shadowing false
+skinparam actorStyle awesome
+skinparam usecase {
+  BackgroundColor #F8F9FA
+  BorderColor #4C6EF5
+  ArrowColor #495057
+}
+
+actor "预约用户" as RU <<abstract>>
+actor "学生" as STU
+actor "教师" as TEA
+actor "教室管理员" as CA
+actor "系统管理员" as SA
+actor "教务管理人员" as EA
+actor "统一身份认证平台" as SSO <<系统>>
+actor "教务排课系统" as SCH <<系统>>
+actor "消息推送服务" as MSG <<系统>>
+actor "定时调度器" as TIMER <<系统>>
+
+' 参与者泛化
+STU --|> RU
+TEA --|> RU
+
+rectangle "校园空教室预约管理系统" {
+  usecase "UC-01 登录与身份认证" as UC01
+  usecase "UC-02 查询空教室" as UC02
+  usecase "UC-03 提交预约申请" as UC03
+  usecase "UC-04 校验预约可用性" as UC04
+  usecase "UC-05 提交证明材料" as UC05
+  usecase "UC-06 审批预约申请" as UC06
+  usecase "UC-07 取消预约" as UC07
+  usecase "UC-08 变更预约" as UC08
+  usecase "UC-09 查询我的预约" as UC09
+  usecase "UC-10 签到核验" as UC10
+  usecase "UC-11 超时未签到自动释放" as UC11
+  usecase "UC-12 违约与信用管理" as UC12
+  usecase "UC-13 管理教室信息" as UC13
+  usecase "UC-14 同步课表占用数据" as UC14
+  usecase "UC-15 维护用户与权限" as UC15
+  usecase "UC-16 查看统计报表" as UC16
+  usecase "UC-17 发送消息通知" as UC17
+}
+
+' ---------- 参与者与用况的关联 ----------
+RU --> UC01
+RU --> UC02
+RU --> UC03
+RU --> UC07
+RU --> UC08
+RU --> UC09
+RU --> UC10
+
+CA --> UC01
+CA --> UC06
+CA --> UC12
+CA --> UC13
+CA --> UC16
+
+SA --> UC01
+SA --> UC15
+SA --> UC16
+SA --> UC14
+
+EA --> UC01
+EA --> UC16
+
+SSO --> UC01
+SCH --> UC14
+TIMER --> UC11
+MSG --> UC17
+
+' ---------- 用况之间的关系 ----------
+UC03 ..> UC04 : <<include>>
+UC08 ..> UC04 : <<include>>
+UC10 ..> UC04 : <<include>>
+UC03 ..> UC17 : <<include>>
+UC06 ..> UC17 : <<include>>
+UC07 ..> UC17 : <<include>>
+UC11 ..> UC12 : <<include>>
+UC11 ..> UC17 : <<include>>
+
+UC05 .> UC03 : <<extend>>
+
+legend right
+  <<abstract>> 抽象参与者：本身不实例化，仅供泛化
+  ---
+  «include»：被包含用况是基用况的必经步骤
+  «extend»：扩展用况在满足条件时才插入基用况
+endlegend
+@enduml
