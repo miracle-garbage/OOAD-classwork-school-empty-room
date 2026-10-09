@@ -1,0 +1,120 @@
+@startuml 类图-分析类图
+' ============================================================
+' 分析模型 · 分析类图（Boundary / Control / Entity）
+' 系统：校园空教室预约管理系统（CFRMS）
+' 说明：按 Jacobson（OOSE）健壮分析的三类分析类组织，
+'       展示「用况 → 边界类 / 控制类 / 实体类」的映射与调用方向。
+' ============================================================
+title 图 2  校园空教室预约管理系统 · 分析类图（边界类 / 控制类 / 实体类）
+skinparam defaultFontName "Microsoft YaHei"
+skinparam shadowing false
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+skinparam nodesep 24
+skinparam ranksep 60
+hide circle
+top to bottom direction
+
+package "边界类 Boundary（与参与者交互）" #EAF6EE {
+  class "登录界面" as B_Login <<boundary>>
+  class "空教室查询界面" as B_Query <<boundary>>
+  class "预约申请界面" as B_Reserve <<boundary>>
+  class "我的预约 / 签到界面" as B_MyCheckIn <<boundary>>
+  class "预约审批界面" as B_Approval <<boundary>>
+  class "教室管理界面" as B_Classroom <<boundary>>
+  class "用户 / 权限 / 统计管理界面" as B_Admin <<boundary>>
+  class "外部适配器\n(认证 / 课表 / 消息 / 门禁)" as B_Adapter <<boundary>>
+}
+
+package "控制类 Control（用况的实现逻辑）" #FFF6E6 {
+  class "登录控制器" as C_Login <<control>>
+  class "空教室查询控制器" as C_Query <<control>>
+  class "预约控制器" as C_Reserve <<control>>
+  class "预约规则校验器" as C_Validator <<control>>
+  class "审批控制器" as C_Approval <<control>>
+  class "签到控制器" as C_CheckIn <<control>>
+  class "超时未签到释放任务" as C_Release <<control>>
+  class "教室管理控制器" as C_Classroom <<control>>
+  class "违约与信用控制器" as C_Credit <<control>>
+  class "用户与权限控制器" as C_User <<control>>
+  class "统计报表控制器" as C_Stat <<control>>
+  class "课表同步服务" as C_Sync <<control>>
+  class "通知服务" as C_Notify <<control>>
+}
+
+package "实体类 Entity（业务数据与规则）" #EDF2FF {
+  class "用户 / 学生 / 教师\n教室管理员 / 系统管理员 / 教务管理人员" as E_User <<entity>>
+  class "角色 / 权限" as E_Role <<entity>>
+  class "信用信息" as E_Credit <<entity>>
+  class "教室" as E_Classroom <<entity>>
+  class "教室设备 / 开放时间规则" as E_Equip <<entity>>
+  class "课表占用" as E_Schedule <<entity>>
+  class "时段" as E_Slot <<entity>>
+  class "预约" as E_Reservation <<entity>>
+  class "用途类别" as E_Purpose <<entity>>
+  class "签到记录" as E_CheckIn <<entity>>
+  class "审批日志" as E_Approval <<entity>>
+  class "违约记录" as E_Violation <<entity>>
+  class "证明材料" as E_Material <<entity>>
+  class "通知" as E_Notify <<entity>>
+  class "登录日志" as E_Log <<entity>>
+}
+
+' ---------- 边界类 → 控制类（参与者意图的入口） ----------
+B_Login --> C_Login
+B_Query --> C_Query
+B_Reserve --> C_Reserve
+B_MyCheckIn --> C_CheckIn
+B_MyCheckIn --> C_Reserve
+B_Approval --> C_Approval
+B_Classroom --> C_Classroom
+B_Admin --> C_User
+B_Admin --> C_Stat
+B_Admin --> C_Credit
+B_Adapter --> C_Login
+B_Adapter --> C_Sync
+B_Adapter --> C_Notify
+
+' ---------- 控制类 → 实体类（读写业务数据） ----------
+C_Login --> E_User
+C_Login --> E_Role
+C_Login --> E_Log
+C_Query --> E_Classroom
+C_Query --> E_Schedule
+C_Query --> E_Reservation
+C_Reserve --> E_Reservation
+C_Reserve --> C_Validator
+C_Validator --> E_Slot
+C_Validator --> E_Schedule
+C_Validator --> E_Credit
+C_Validator --> E_Purpose
+C_Approval --> E_Approval
+C_CheckIn --> E_CheckIn
+C_Release --> E_Violation
+C_Release --> C_Credit
+C_Credit --> E_Credit
+C_Classroom --> E_Classroom
+C_Classroom --> E_Equip
+C_User --> E_User
+C_Sync --> E_Schedule
+C_Reserve --> E_Material
+C_Stat --> E_Reservation
+
+' ---------- 控制类 → 通知服务（消息集中编排） ----------
+C_Reserve --> C_Notify
+C_Approval --> C_Notify
+C_Release --> C_Notify
+C_Notify --> E_Notify
+
+' ============================================================
+' 图例
+' ============================================================
+legend right
+  «boundary» 边界类：参与者与系统的交互入口（界面 / 外部适配器）
+  «control»  控制类：一个或几个用况的业务逻辑（对应用况协调器）
+  «entity»   实体类：业务数据与业务规则的载体（持久化对象）
+  ---
+  箭头方向 = 调用 / 使用方向（边界 → 控制 → 实体）
+  图 2 只表达分层与映射；实体类之间的泛化 / 聚合 / 关联见「图 1 领域实体类图」
+endlegend
+@enduml
