@@ -4,6 +4,9 @@
 ' 系统：校园空教室预约管理系统（CFRMS）
 ' 说明：按 Jacobson（OOSE）健壮分析的三类分析类组织，
 '       展示「用况 → 边界类 / 控制类 / 实体类」的映射与调用方向。
+' 成图：本文件是等价模型源；diagrams/svg|png/类图-分析类图 由
+'       tools/render_offline.py analysis 以「三带分层 + 正交走线」重排后生成，
+'       避免 PlantUML 在缺 Graphviz 时几十条跨层关系绞成一团（模型完全一致）。
 ' ============================================================
 title 图 2  校园空教室预约管理系统 · 分析类图（边界类 / 控制类 / 实体类）
 skinparam defaultFontName "Microsoft YaHei"
@@ -64,6 +67,7 @@ package "实体类 Entity（业务数据与规则）" #EDF2FF {
 B_Login --> C_Login
 B_Query --> C_Query
 B_Reserve --> C_Reserve
+B_Reserve --> C_Validator
 B_MyCheckIn --> C_CheckIn
 B_MyCheckIn --> C_Reserve
 B_Approval --> C_Approval

@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-离线类图渲染器（无 PlantUML / plantuml.jar 时的后备方案）。
+类图渲染器：负责图 2 的「整理版分层布局」，兼作无 PlantUML / plantuml.jar 时的后备方案。
 
 本脚本用纯 Python 生成 SVG，再调用本机 LibreOffice 把 SVG 转成 PNG，
 用于在没有 Java + plantuml.jar、又不能联网的环境里产出图片。
 
 规范来源仍然是 .puml 文件（class-diagram-domain.puml /
 class-diagram-analysis.puml）；本脚本渲染的是同一份模型，仅排版取值不同。
+其中图 2（分析类图）关系密集、跨层连线多，PlantUML 直出容易绞成一团，故这里
+用「三带分层 + 正交折线 + 轨道分配」重新排版：连线走「源底部 → 专用轨道 →
+目标顶部」，同轨水平段互不重叠、转角圆角化，读起来一条是一条。
 """
 
 import html
 import math
 import os
+import re
 import subprocess
 import sys
 
@@ -261,81 +265,275 @@ def render_domain(nodes, edges, out_base, title):
     save(c.finish(W, H), out_base)
 
 
-def render_layered(pkgs, arrows, out_base, title, legend_lines):
+# ---------------------------------------------------------------------
+# 图 2：分析类图（边界 / 控制 / 实体）—— 整理版分层布局
+# ---------------------------------------------------------------------
+# PlantUML 在缺少 Graphviz 的机器上会退化成内置布局，几十条跨层关系容易互相
+# 缠绕。这里改用「三带分层 + 正交折线 + 轨道分配」的确定性排版重新出图：类与
+# 关系同 class-diagram-analysis.puml 完全一致，只是排版更整齐——连线走
+# 「源底部 → 专用轨道 → 目标顶部」，同一轨道上的水平段互不重叠、转角圆角化，
+# 因此不再绞成一团。
+
+CHIP_W = 150.0               # 分析类方块宽度
+CHIP_GAP = 20.0              # 列间距
+CHIP_PITCH = CHIP_W + CHIP_GAP
+COL0 = 46.0                  # 第 0 列左边界
+BAND_HEADER = 34.0           # 层标题条高度
+TRACK_STEP = 12.0            # 走线轨道间距
+EDGE_COLOR = "#566072"
+
+
+def col_cx(col):
+    """列号（可为小数）→ 该列中心 x。"""
+    return COL0 + col * CHIP_PITCH + CHIP_W / 2.0
+
+
+def assign_tracks(intervals):
+    """区间着色：为每条水平走线分配轨道，同轨区间互不重叠。"""
+    tracks = []                       # 每条轨道已占用的最右端
+    res = [0] * len(intervals)
+    for i in sorted(range(len(intervals)), key=lambda k: intervals[k][0]):
+        lo, hi = intervals[i]
+        for t, end in enumerate(tracks):
+            if lo - end >= 8.0:
+                tracks[t] = hi
+                res[i] = t
+                break
+        else:
+            tracks.append(hi)
+            res[i] = len(tracks) - 1
+    return res, len(tracks)
+
+
+def rounded_path(pts, r=7.0):
+    """正交折线 → 带圆角的 SVG path。"""
+    pts = [pts[0]] + [p for k, p in enumerate(pts[1:], 1) if p != pts[k - 1]]
+    if len(pts) < 2:
+        return ""
+    d = f"M {pts[0][0]:.1f} {pts[0][1]:.1f}"
+    for i in range(1, len(pts) - 1):
+        p0, p1, p2 = pts[i - 1], pts[i], pts[i + 1]
+        v1 = (p1[0] - p0[0], p1[1] - p0[1])
+        v2 = (p2[0] - p1[0], p2[1] - p1[1])
+        l1, l2 = math.hypot(*v1), math.hypot(*v2)
+        rr = min(r, l1 / 2.0, l2 / 2.0)
+        ax, ay = p1[0] - v1[0] / l1 * rr, p1[1] - v1[1] / l1 * rr
+        bx, by = p1[0] + v2[0] / l2 * rr, p1[1] + v2[1] / l2 * rr
+        d += f" L {ax:.1f} {ay:.1f} Q {p1[0]:.1f} {p1[1]:.1f} {bx:.1f} {by:.1f}"
+    d += f" L {pts[-1][0]:.1f} {pts[-1][1]:.1f}"
+    return d
+
+
+class Chip:
+    """分层图中的一个分析类方块（«stereotype» + 类名）。"""
+
+    def __init__(self, cid, name, kind, col, row=0):
+        self.id, self.name, self.kind, self.row = cid, name, kind, row
+        self.x = col_cx(col)
+        self.y = 0.0
+        self.w = CHIP_W
+        self.h = 49.0
+        self.fs = 12.5
+        self.lines = []
+
+    @property
+    def top(self):
+        return self.y
+
+    @property
+    def bottom(self):
+        return self.y + self.h
+
+    def fit(self):
+        """按“ / ”断行（过长再按字符断），必要时缩小字号，保证文字不出框。"""
+        max_w = self.w - 18
+        lines = []
+        for seg in self.name.split("\n"):
+            cur = ""
+            for part in seg.split(" / "):
+                cand = part if not cur else f"{cur} / {part}"
+                if not cur or text_w(cand, self.fs) <= max_w:
+                    cur = cand
+                else:
+                    lines.append(cur)
+                    cur = part
+            lines.append(cur)
+        # 单段本身就超宽时按字符硬断，避免文字溢出方块
+        wrapped = []
+        for ln in lines:
+            if text_w(ln, self.fs) <= max_w:
+                wrapped.append(ln)
+                continue
+            piece = ""
+            for ch in ln:
+                if piece and text_w(piece + ch, self.fs) > max_w:
+                    wrapped.append(piece)
+                    piece = ch
+                else:
+                    piece += ch
+            wrapped.append(piece)
+        lines = wrapped
+        widest = max(text_w(ln, self.fs) for ln in lines)
+        if widest > max_w:
+            self.fs = max(9.5, self.fs * max_w / widest)
+        self.lines = lines
+        self.h = 33.0 + 16.0 * len(lines)
+
+
+def render_analysis_layered(boundary, row1, row2, entities, b2c, c2c, c2e,
+                            out_base, title, legend_lines):
+    """三带分层排版：边界（上）/ 控制（中，两行）/ 实体（下）。"""
+    chips = {}
+    for group, kind, row in ((boundary, "boundary", 0), (row1, "control", 1),
+                             (row2, "control", 2), (entities, "entity", 3)):
+        for item in group:
+            cid, name, col = item[:3]
+            chips[cid] = Chip(cid, name, kind, col, row=row)
+            if len(item) > 3:                      # 个别长名字给更宽的方块
+                chips[cid].w = item[3]
+    for ch in chips.values():
+        ch.fit()
+
+    def route(edges):
+        """为每条边确定出口 x、入口 x 与水平走线轨道号。"""
+        outs, ins = {}, {}
+        for s, t in edges:
+            outs.setdefault(s, []).append(t)
+            ins.setdefault(t, []).append(s)
+        ex, en = {}, {}
+        for s, ts in outs.items():
+            ts = sorted(ts, key=lambda t: chips[t].x)
+            half = chips[s].w / 2.0 - 14.0
+            for i, t in enumerate(ts):
+                ex[(s, t)] = chips[s].x + (0.0 if len(ts) == 1 else
+                                           -half + 2 * half * i / (len(ts) - 1))
+        for t, ss in ins.items():
+            ss = sorted(ss, key=lambda s: chips[s].x)
+            half = chips[t].w / 2.0 - 14.0
+            for i, s in enumerate(ss):
+                en[(s, t)] = chips[t].x + (0.0 if len(ss) == 1 else
+                                           -half + 2 * half * i / (len(ss) - 1))
+        ivs = [(min(ex[e], en[e]), max(ex[e], en[e])) for e in edges]
+        tracks, ntr = assign_tracks(ivs)
+        return {e: (ex[e], en[e], tracks[i]) for i, e in enumerate(edges)}, ntr
+
+    r_b2c, n_b2c = route(b2c)
+    r_c2c, n_c2c = route(c2c)
+    r_c2e, n_c2e = route(c2e)
+
+    pad = 18.0
+    gap1_h = pad * 2 + n_b2c * TRACK_STEP
+    rowgap_h = pad * 2 + n_c2c * TRACK_STEP
+    gap2_h = pad * 2 + n_c2e * TRACK_STEP
+
+    h_bnd = max(chips[c].h for c in (it[0] for it in boundary))
+    h_r1 = max(chips[c].h for c in (it[0] for it in row1))
+    h_r2 = max(chips[c].h for c in (it[0] for it in row2))
+    h_ent = max(chips[c].h for c in (it[0] for it in entities))
+
+    y_band1 = 64.0
+    ch_top1 = y_band1 + BAND_HEADER + 14.0
+    band1_bot = ch_top1 + h_bnd + 16.0
+    y_band2 = band1_bot + gap1_h
+    ch_top_r1 = y_band2 + BAND_HEADER + 14.0
+    ch_top_r2 = ch_top_r1 + h_r1 + rowgap_h
+    band2_bot = ch_top_r2 + h_r2 + 16.0
+    y_band3 = band2_bot + gap2_h
+    ch_top3 = y_band3 + BAND_HEADER + 14.0
+    band3_bot = ch_top3 + h_ent + 16.0
+
+    for cid in (it[0] for it in boundary):
+        chips[cid].y = ch_top1
+    for cid in (it[0] for it in row1):
+        chips[cid].y = ch_top_r1
+    for cid in (it[0] for it in row2):
+        chips[cid].y = ch_top_r2
+    for cid in (it[0] for it in entities):
+        chips[cid].y = ch_top3
+
+    band_x0 = COL0 - 26.0
+    band_w = (len(entities) - 1) * CHIP_PITCH + CHIP_W + 52.0
+    W = band_x0 + band_w + COL0
+    H = band3_bot + 30.0 + len(legend_lines) * 17.0 + 20.0
+
     c = Canvas()
-    x0, y0 = 40, 70
-    width = 1180
-    pkg_gap = 130
-    chip_h = 40
-    chip_gap = 14
-    per_row = 4
-    chip_w = (width - 60 - (per_row - 1) * chip_gap) / per_row
-    y = y0
-    centers = {}
-    for pname, pcolor, pborder, chips in pkgs:
-        cols = min(per_row, len(chips))
-        rows = math.ceil(len(chips) / per_row)
-        rows = max(rows, 1)
-        h = 54 + rows * chip_h + (rows - 1) * chip_gap + 24
-        c.rect(x0, y, width, h, fill="#FFFFFF", stroke=pborder, sw=1.8, rx=10)
-        c.add(f'<rect x="{x0}" y="{y}" width="{width}" height="38" rx="10" ry="10" '
-              f'fill="{pcolor}" stroke="none"/>')
-        c.add(f'<rect x="{x0}" y="{y + 28}" width="{width}" height="10" '
-              f'fill="{pcolor}" stroke="none"/>')
-        c.text(x0 + 18, y + 26, pname, fs=15.5, weight="bold", color="#212529")
-        centers[pname] = (x0 + width / 2, y, y + h)
-        cy = y + 54
-        for r in range(rows):
-            for k in range(per_row):
-                idx = r * per_row + k
-                if idx >= len(chips):
-                    break
-                cx = x0 + 30 + k * (chip_w + chip_gap)
-                c.rect(cx, cy, chip_w, chip_h, fill="#FFFFFF", stroke=pborder,
-                       sw=1.0, rx=6)
-                c.add(f'<rect x="{cx}" y="{cy}" width="{chip_w}" height="{chip_h}" '
-                      f'rx="6" ry="6" fill="{pcolor}" opacity="0.45" stroke="none"/>')
-                lines = chips[idx].split("\n")
-                fs = 12.5
-                longest = max(text_w(t, fs) for t in lines)
-                if longest > chip_w - 14:
-                    fs = max(9.0, fs * (chip_w - 14) / longest)
-                lh = fs + 3
-                y0 = cy + chip_h / 2 - (len(lines) - 1) * lh / 2 + fs * 0.36
-                for j, t in enumerate(lines):
-                    c.text(cx + chip_w / 2, y0 + j * lh, t, fs=fs,
-                           anchor="middle", color="#212529")
-            cy += chip_h + chip_gap
-        y += h + pkg_gap
-    # 层间箭头
-    ys = sorted(centers.values(), key=lambda v: v[1])
-    for i in range(len(ys) - 1):
-        top_bottom = ys[i][2]
-        bot_top = ys[i + 1][1]
-        cx = (ys[i][0] + ys[i + 1][0]) / 2
-        mid = (top_bottom + bot_top) / 2
-        c.line(cx, top_bottom + 6, cx, mid - 6, color="#868E96", width=2.2)
-        c.polygon([(cx, mid + 4), (cx - 7, mid - 8), (cx + 7, mid - 8)],
-                  fill="#868E96", stroke="#868E96", sw=1.0)
-    W = x0 + width + 40
-    H = y + 20
+
+    def band(y, h, color, border, label):
+        c.rect(band_x0, y, band_w, h, fill="#FFFFFF", stroke=border, sw=1.8, rx=8)
+        c.add(f'<path d="M {band_x0 + 8:.1f} {y:.1f} '
+              f'H {band_x0 + band_w - 8:.1f} Q {band_x0 + band_w:.1f} {y:.1f} '
+              f'{band_x0 + band_w:.1f} {y + 8:.1f} V {y + BAND_HEADER:.1f} '
+              f'H {band_x0:.1f} V {y + 8:.1f} Q {band_x0:.1f} {y:.1f} '
+              f'{band_x0 + 8:.1f} {y:.1f} Z" fill="{color}" stroke="none"/>')
+        c.text(band_x0 + band_w / 2, y + 23, label, fs=15.5, weight="bold",
+               anchor="middle", color="#1F2937")
+
+    band(y_band1, band1_bot - y_band1, "#EAF6EE", "#2F9E44",
+         "边界类 Boundary（参与者与系统的交互入口）")
+    band(y_band2, band2_bot - y_band2, "#FFF6E6", "#E8590C",
+         "控制类 Control（用况的实现逻辑）")
+    band(y_band3, band3_bot - y_band3, "#EDF2FF", "#3B5BDB",
+         "实体类 Entity（业务数据与业务规则的载体）")
+
+    def draw_group(routes, gap_top):
+        for (s, t), (x1, x2, track) in routes.items():
+            ty = gap_top + pad + track * TRACK_STEP
+            y2 = chips[t].top
+            pts = [(x1, chips[s].bottom), (x1, ty), (x2, ty), (x2, y2)]
+            c.add(f'<path d="{rounded_path(pts)}" fill="none" stroke="{EDGE_COLOR}" '
+                  f'stroke-width="1.25" stroke-linejoin="round"/>')
+            c.add(f'<path d="M {x2 - 5:.1f} {y2 - 9:.1f} L {x2:.1f} {y2:.1f} '
+                  f'L {x2 + 5:.1f} {y2 - 9:.1f}" fill="none" '
+                  f'stroke="{EDGE_COLOR}" stroke-width="1.25" stroke-linecap="round"/>')
+
+    draw_group(r_b2c, band1_bot)
+    draw_group(r_c2c, ch_top_r1 + h_r1)
+    draw_group(r_c2e, band2_bot)
+
+    for ch in chips.values():
+        fill, border, head = STYLE[ch.kind]
+        c.rect(ch.x - ch.w / 2, ch.y, ch.w, ch.h, fill=fill, stroke=border,
+               sw=1.3, rx=5)
+        c.text(ch.x, ch.y + 15, f"«{ch.kind}»", fs=10.5, color=head,
+               anchor="middle", style="italic")
+        for i, ln in enumerate(ch.lines):
+            c.text(ch.x, ch.y + 31 + i * 16, ln, fs=ch.fs, color="#1F2937",
+                   anchor="middle", weight="bold")
+
     c.text(W / 2, 36, title, fs=19, weight="bold", anchor="middle", color="#1A1A1A")
-    ly = y + 10
+    ly = band3_bot + 48.0
     for i, ln in enumerate(legend_lines):
-        c.text(x0 + 4, ly + i * 17, ln, fs=11.5, color="#495057")
-    save(c.finish(W, H + len(legend_lines) * 17 + 16), out_base)
+        c.text(COL0, ly + i * 17, ln, fs=11.5, color="#495057")
+    save(c.finish(W, H), out_base, png_width=3600)
 
 
-def save(svg, out_base):
+def save(svg, out_base, png_width=None):
+    """写出 SVG；再用 LibreOffice 转一张 PNG（可选指定像素宽度）。
+
+    PNG 转换失败（例如沙箱 / 无 LibreOffice）只提示、不影响 SVG 产出。
+    """
     os.makedirs(SVG_DIR, exist_ok=True)
     svg_path = os.path.join(SVG_DIR, out_base + ".svg")
     with open(svg_path, "w", encoding="utf-8") as f:
         f.write(svg)
-    png_path = os.path.join(PNG_DIR, out_base + ".png")
     os.makedirs(PNG_DIR, exist_ok=True)
-    subprocess.run(["soffice", "--headless", "--convert-to", "png",
-                    "--outdir", PNG_DIR, svg_path],
-                   check=True, capture_output=True)
+    filt = "png"
+    if png_width:
+        # LibreOffice 命令行默认把长边压到 2048px；宽、高都要显式给出（取值写成
+        # 字符串）才能按目标分辨率导出，否则会自动缩到 2048 宽导致糊字。
+        m = re.search(r'width="([0-9.]+)px"\s+height="([0-9.]+)px"', svg)
+        ratio = (float(m.group(2)) / float(m.group(1))) if m else 0.34
+        filt = ('png:draw_png_Export:{"PixelWidth":{"type":"long","value":"%d"},'
+                '"PixelHeight":{"type":"long","value":"%d"}}'
+                % (int(png_width), int(round(png_width * ratio))))
+    try:
+        subprocess.run(["soffice", "--headless", "--convert-to", filt,
+                        "--outdir", PNG_DIR, svg_path],
+                       check=True, capture_output=True)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print("warn: soffice 转 PNG 失败（已保留 SVG）：", exc)
+        print("wrote", svg_path)
+        return
     # libreoffice 可能按 basename 输出，统一命名
     produced = os.path.join(PNG_DIR, out_base + ".png")
     if not os.path.exists(produced):
@@ -463,27 +661,98 @@ def build_domain():
 # 图 2：分析类图（边界 / 控制 / 实体）
 # =====================================================================
 def build_analysis():
+    # (id, 名称, 列号)：列号是 0 起算的浮点列，同一行内互不重叠。
     boundary = [
-        "登录界面", "空教室查询界面", "预约申请界面", "我的预约 / 签到界面",
-        "预约审批界面", "教室管理界面", "用户 / 权限 / 统计界面",
-        "外部适配器\n(认证 / 课表 / 消息 / 门禁)",
+        ("B_Login", "登录界面", 1.2),
+        ("B_Classroom", "教室管理界面", 2.4),
+        ("B_Adapter", "外部适配器\n(认证 / 课表 / 消息 / 门禁)", 3.6, 196.0),
+        ("B_Query", "空教室查询界面", 4.8),
+        ("B_Admin", "用户 / 权限 / 统计管理界面", 6.0, 186.0),
+        ("B_Reserve", "预约申请界面", 9.5),
+        ("B_Approval", "预约审批界面", 11.0),
+        ("B_MyCheckIn", "我的预约 / 签到界面", 12.6),
     ]
-    control = [
-        "登录控制器", "空教室查询控制器", "预约控制器", "预约规则校验器",
-        "审批控制器", "签到控制器", "超时未签到释放任务", "教室管理控制器",
-        "违约与信用控制器", "用户与权限控制器", "统计报表控制器",
-        "课表同步服务", "通知服务",
+    control_row1 = [
+        ("C_User", "用户与权限控制器", 0.0),
+        ("C_Login", "登录控制器", 1.2),
+        ("C_Classroom", "教室管理控制器", 2.4),
+        ("C_Sync", "课表同步服务", 3.6),
+        ("C_Query", "空教室查询控制器", 4.8),
+        ("C_Stat", "统计报表控制器", 7.0),
+        ("C_Release", "超时未签到释放任务", 9.3),
+        ("C_Reserve", "预约控制器", 10.4),
+        ("C_Approval", "审批控制器", 11.6),
+        ("C_CheckIn", "签到控制器", 12.8),
+    ]
+    control_row2 = [
+        ("C_Credit", "违约与信用控制器", 6.0),
+        ("C_Validator", "预约规则校验器", 8.2),
+        ("C_Notify", "通知服务", 14.0),
     ]
     entity = [
-        "用户 / 学生 / 教师 /\n管理员 / 教务管理人员", "角色 / 权限", "信用信息",
-        "教室", "教室设备 / 开放时间规则", "课表占用", "时段", "预约",
-        "用途类别", "签到记录", "审批日志", "违约记录", "证明材料", "通知",
-        "登录日志",
+        ("E_User", "用户 / 学生 / 教师 /\n教室管理员 / 系统管理员\n教务管理人员", 0.0, 184.0),
+        ("E_Role", "角色 / 权限", 1.0),
+        ("E_Log", "登录日志", 2.0),
+        ("E_Equip", "教室设备 /\n开放时间规则", 3.0),
+        ("E_Classroom", "教室", 4.0),
+        ("E_Schedule", "课表占用", 5.0),
+        ("E_Reservation", "预约", 6.0),
+        ("E_Credit", "信用信息", 7.0),
+        ("E_Purpose", "用途类别", 8.0),
+        ("E_Slot", "时段", 9.0),
+        ("E_Violation", "违约记录", 10.0),
+        ("E_Material", "证明材料", 11.0),
+        ("E_Approval", "审批日志", 12.0),
+        ("E_CheckIn", "签到记录", 13.0),
+        ("E_Notify", "通知", 14.0),
     ]
-    pkgs = [
-        ("边界类 Boundary（参与者与系统的交互入口）", "#EAF6EE", "#2F9E44", boundary),
-        ("控制类 Control（用况的实现逻辑，一个控制类对应 1~2 个用况）", "#FFF6E6", "#E8590C", control),
-        ("实体类 Entity（业务数据与业务规则的载体）", "#EDF2FF", "#3B5BDB", entity),
+    # 关系与 diagrams/class-diagram-analysis.puml 一一对应。
+    boundary_to_control = [
+        ("B_Login", "C_Login"),
+        ("B_Query", "C_Query"),
+        ("B_Reserve", "C_Reserve"),
+        ("B_Reserve", "C_Validator"),
+        ("B_MyCheckIn", "C_CheckIn"),
+        ("B_MyCheckIn", "C_Reserve"),
+        ("B_Approval", "C_Approval"),
+        ("B_Classroom", "C_Classroom"),
+        ("B_Admin", "C_User"),
+        ("B_Admin", "C_Stat"),
+        ("B_Admin", "C_Credit"),
+        ("B_Adapter", "C_Login"),
+        ("B_Adapter", "C_Sync"),
+        ("B_Adapter", "C_Notify"),
+    ]
+    control_to_control = [
+        ("C_Reserve", "C_Validator"),
+        ("C_Reserve", "C_Notify"),
+        ("C_Approval", "C_Notify"),
+        ("C_Release", "C_Credit"),
+        ("C_Release", "C_Notify"),
+    ]
+    control_to_entity = [
+        ("C_Login", "E_User"),
+        ("C_Login", "E_Role"),
+        ("C_Login", "E_Log"),
+        ("C_Query", "E_Classroom"),
+        ("C_Query", "E_Schedule"),
+        ("C_Query", "E_Reservation"),
+        ("C_Reserve", "E_Reservation"),
+        ("C_Validator", "E_Slot"),
+        ("C_Validator", "E_Schedule"),
+        ("C_Validator", "E_Credit"),
+        ("C_Validator", "E_Purpose"),
+        ("C_Approval", "E_Approval"),
+        ("C_CheckIn", "E_CheckIn"),
+        ("C_Release", "E_Violation"),
+        ("C_Credit", "E_Credit"),
+        ("C_Classroom", "E_Classroom"),
+        ("C_Classroom", "E_Equip"),
+        ("C_User", "E_User"),
+        ("C_Sync", "E_Schedule"),
+        ("C_Reserve", "E_Material"),
+        ("C_Stat", "E_Reservation"),
+        ("C_Notify", "E_Notify"),
     ]
     legend = [
         "«boundary» 边界类：参与者与系统交互的入口（界面 / 外部适配器）。",
@@ -492,9 +761,11 @@ def build_analysis():
         "箭头方向 = 调用 / 使用方向：边界类 → 控制类 → 实体类。",
         "注：本图表达分层与「用况 → 类」的映射，非实体类之间的结构关系。",
     ]
-    render_layered(pkgs, None, "类图-分析类图",
-                   "图 2  校园空教室预约管理系统 · 分析类图（边界 / 控制 / 实体）",
-                   legend)
+    render_analysis_layered(boundary, control_row1, control_row2, entity,
+                            boundary_to_control, control_to_control,
+                            control_to_entity, "类图-分析类图",
+                            "图 2  校园空教室预约管理系统 · 分析类图（边界类 / 控制类 / 实体类）",
+                            legend)
 
 
 if __name__ == "__main__":

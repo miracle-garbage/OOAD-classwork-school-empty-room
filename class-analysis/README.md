@@ -22,11 +22,13 @@
 | `diagrams/png/*.png` | 已渲染的位图（2 张），可直接插入 Word / PPT |
 | `diagrams/svg/*.svg` | 已渲染的矢量图（2 张），排版放大不失真 |
 | `tools/plantuml.jar` | PlantUML 1.2026.8 渲染器（本地工具，已被 `.gitignore` 的 `*.jar` 规则忽略，不入库） |
-| `tools/render_offline.py` | 离线渲染脚本（无 `plantuml.jar` 且不能联网时的后备方案） |
+| `tools/render_offline.py` | 排版脚本：图 2 的「整理版分层布局」（正交走线、连线不缠绕）由它生成，兼作离线后备渲染 |
 
 ## 如何渲染并导出图片
 
-两张图均由 **PlantUML 1.2026.8 + Graphviz** 渲染完成，可直接使用 `diagrams/png`（位图）或 `diagrams/svg`（矢量图）。如需重新渲染：
+图 1 由 **PlantUML 1.2026.8 + Graphviz** 渲染；图 2 关系密集、跨层连线多，PlantUML 直出容易缠绕，
+因此由 `tools/render_offline.py` 的「整理版分层布局」（正交走线 + 轨道分配）重新排版生成。
+两张图都可直接取用 `diagrams/png`（位图）或 `diagrams/svg`（矢量图）。如需重新渲染：
 
 1. **命令行（本目录已附 `tools/plantuml.jar`）**：
 
@@ -38,8 +40,16 @@
 
    类图依赖 Graphviz 的 `dot`；`dot` 不在 PATH 时可用 `GRAPHVIZ_DOT=/path/to/dot java -jar ...` 指定。
 2. **VS Code 扩展**：安装 `jebbs.plantuml`，打开任一 `.puml` 文件，按 `Alt+D` 预览，右键 `Export Current Diagram` 导出 PNG / SVG。
-3. **离线后备（可选）**：`tools/render_offline.py` 可在没有 Java / `plantuml.jar` 且不能联网时生成同模型图片：
-   `python3 tools/render_offline.py`（依赖本机 LibreOffice 把 SVG 转 PNG）。
+3. **整理版排版 / 离线后备**：`tools/render_offline.py` 用「三带分层 + 正交折线 + 轨道分配」重排图 2，
+   让连线不再绞在一起（模型与 `.puml` 一致），也兼作没有 Java / `plantuml.jar` 且不能联网时的后备方案：
+
+   ```bash
+   cd class-analysis
+   python3 tools/render_offline.py analysis   # 只重排图 2（分析类图）
+   python3 tools/render_offline.py            # 图 1 + 图 2 一起
+   ```
+
+   脚本先生成 SVG，再调用本机 LibreOffice 把它转成 PNG（PNG 转换失败时只告警，SVG 照常产出）。
 
 > 提示：两个 `.puml` 文件均已设置 `skinparam defaultFontName "Microsoft YaHei"`，并以 `-charset UTF-8` 渲染，避免中文显示为方块。
 
