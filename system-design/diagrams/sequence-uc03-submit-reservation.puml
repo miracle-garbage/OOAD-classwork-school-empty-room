@@ -1,0 +1,61 @@
+@startuml 顺序图-UC03-提交预约申请
+title 顺序图 · UC-03 提交预约申请（含 UC-04 / UC-05）
+skinparam defaultFontName "Noto Sans CJK SC"
+skinparam shadowing false
+skinparam sequenceMessageAlign center
+skinparam maxMessageSize 170
+autonumber
+hide footbox
+
+actor "预约用户" as User
+participant "预约申请界面" as UI
+participant "预约控制器\n(应用服务)" as Controller
+participant "预约规则校验器\nReservationPolicy" as Policy
+participant "课表适配器" as Schedule
+participant "预约仓储" as Repo
+database "数据库\n区间互斥约束" as DB
+participant "通知服务\n(Outbox)" as Notify
+
+User -> UI: 填写用途、教室、时段、人数与材料
+UI -> Controller: POST /reservations\nIdempotency-Key + CreateReservation
+Controller -> Repo: findByRequestId(userId, requestId)
+Repo -> DB: 查询请求幂等记录
+DB --> Repo: 无记录
+Repo --> Controller: 无记录
+
+Controller -> Policy: validate(candidate, operator)
+Policy -> Policy: 校验时间窗、提前量、时长、\n容量、信用、在途数与材料
+Policy -> Schedule: findOccupied(classroomId, slot)
+Schedule --> Policy: 课表占用（或 DEGRADED）
+Policy -> Repo: findActiveOverlaps(classroomId, slot)
+Repo -> DB: 查询有效预约区间
+DB --> Repo: 无重叠
+Repo --> Policy: 无重叠
+Policy --> Controller: ValidationResult(valid)
+
+alt 校验不通过
+  Controller --> UI: 422 RULE_VIOLATION\nfieldErrors + suggestedValues
+  UI --> User: 展示原因与可替代时段
+else 校验通过
+  Controller -> Repo: saveNew(reservation, requestId, outboxEvents)
+  Repo -> DB: BEGIN\nINSERT reservation\nINSERT notification_outbox\nCOMMIT
+  alt 区间唯一约束冲突
+    DB --> Repo: exclusion constraint violation
+    Repo --> Controller: ReservationConflict
+    Controller --> UI: 409 RESERVATION_CONFLICT
+    UI --> User: “该时段刚被占用”
+  else 保存成功
+    DB --> Repo: reservation + version
+    Repo --> Controller: saved
+    alt 需审批类
+      Controller -> Controller: status = PENDING_APPROVAL
+    else 即时类
+      Controller -> Controller: status = ACTIVE\n生成签到凭证
+    end
+    Note over Controller, Notify: 通知事件已随预约事务写入 Outbox
+    Controller --> UI: 201 Created\n预约号、状态、version、签到时间窗
+    UI --> User: 展示“等待审批”或“预约成功”
+    Note over Notify, DB: 事务提交后由 Outbox 投递器\n异步推送用户 / 管理员；失败重试
+  end
+end
+@enduml

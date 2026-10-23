@@ -1,0 +1,57 @@
+@startuml 顺序图-UC11-超时未签到自动释放
+title 顺序图 · UC-11 超时未签到自动释放
+skinparam defaultFontName "Noto Sans CJK SC"
+skinparam shadowing false
+skinparam sequenceMessageAlign center
+skinparam maxMessageSize 170
+autonumber
+hide footbox
+
+participant "定时调度器" as Timer
+participant "超时未签到释放任务" as Task
+participant "预约仓储" as Repo
+database "数据库" as DB
+participant "违约与信用控制器" as Credit
+participant "通知服务\n(Outbox)" as Notify
+
+Timer -> Task: 每 5 分钟触发 run(scanAt, batchSize)
+Task -> Repo: findOverdueCandidates(scanAt, cursor, batchSize)
+Repo -> DB: 查询 ACTIVE 且\n开始后 10 分钟无有效签到
+DB --> Repo: candidates
+Repo --> Task: candidates
+
+loop 每条候选预约（单条独立事务）
+  Task -> Repo: lockAndLoad(reservationId)
+  Repo -> DB: BEGIN + SELECT ... FOR UPDATE
+  DB --> Repo: current status
+  Repo --> Task: reservation
+  alt 已签到 / 已取消 / 状态已变化
+    Task -> DB: ROLLBACK
+    Task -> Task: skipped++
+  else 仍为 ACTIVE 且已超时
+    Task -> Repo: markAutoReleased(reservationId, eventKey)
+    Repo -> DB: UPDATE status=AUTO_RELEASED\nINSERT violation(event key)\nINSERT notification_outbox
+    alt 唯一键表明已处理
+      DB --> Repo: no-op
+      Task -> Task: skipped++
+    else 首次处理
+      DB --> Repo: released
+      Repo --> Task: released
+      Task -> Credit: recalculate(userId)
+      Credit -> DB: 重算信用；达阈值则设置 14 天限制
+      DB --> Credit: creditUpdated
+      Credit --> Task: creditResult
+      Task -> Notify: 写入释放、违约、限制通知
+      Task -> DB: INSERT task_run_log + COMMIT
+      Task -> Task: released++
+    end
+  end
+end
+
+Task --> Timer: runId, processed, released,\nskipped, failed, nextCursor
+Note over Task, DB
+  单条失败只记录错误，不回滚整批；
+  下一轮按游标或幂等键补偿。
+  通知由提交后的 Outbox 投递器发送。
+end note
+@enduml

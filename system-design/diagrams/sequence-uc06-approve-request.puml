@@ -1,0 +1,75 @@
+@startuml 顺序图-UC06-审批预约申请
+title 顺序图 · UC-06 审批预约申请
+skinparam defaultFontName "Noto Sans CJK SC"
+skinparam shadowing false
+skinparam sequenceMessageAlign center
+skinparam maxMessageSize 170
+autonumber
+hide footbox
+
+actor "教室管理员" as Admin
+participant "预约审批界面" as UI
+participant "审批控制器\n(应用服务)" as Controller
+participant "预约规则校验器\nReservationPolicy" as Policy
+participant "预约仓储" as Repo
+database "数据库" as DB
+participant "通知服务\n(Outbox)" as Notify
+
+Admin -> UI: 打开待办并选择预约
+UI -> Controller: GET /admin/approvals/{reservationId}
+Controller -> Repo: findApprovalDetail(id)
+Repo -> DB: 查询预约、课表、材料、信用、审批日志
+DB --> Repo: detail + version
+Repo --> Controller: ApprovalDetail
+Controller --> UI: 200 OK\n详情 + version
+UI --> Admin: 展示冲突、材料与历史
+
+Admin -> UI: 选择通过 / 驳回 / 调整 / 退回
+UI -> Controller: POST decisions\nIf-Match: version + Idempotency-Key
+Controller -> Repo: lockAndLoad(reservationId)
+Repo -> DB: BEGIN + SELECT ... FOR UPDATE
+DB --> Repo: currentReservation
+Repo --> Controller: currentReservation
+
+alt 版本不一致
+  Controller --> UI: 409 VERSION_CONFLICT
+  UI --> Admin: 刷新详情后重试
+else 版本匹配
+  alt 调整教室或时段后通过
+    Controller -> Policy: validate(adjustedResource)
+    Policy -> Repo: findActiveOverlaps(newResource)
+    Repo -> DB: 查询新资源占用
+    DB --> Repo: conflict / no conflict
+    Repo --> Policy: 校验结果
+    Policy --> Controller: ValidationResult
+    alt 新资源冲突
+      Controller -> DB: ROLLBACK
+      Controller --> UI: 409 RESERVATION_CONFLICT
+      UI --> Admin: 原申请仍在待审批队列
+    else 新资源可用
+      Controller -> Controller: 使用新资源
+      Controller -> Controller: ADJUST_AND_APPROVE → ACTIVE\n生成签到凭证
+      Controller -> Repo: saveDecision(status, approvalLog, outbox)
+      Repo -> DB: UPDATE reservation\nINSERT approval_log\nINSERT notification_outbox\nCOMMIT
+      DB --> Repo: committed
+      Repo --> Controller: updated + newVersion
+      Controller --> UI: 200 OK\nresult + newVersion
+      UI --> Admin: 更新待办
+    end
+  else 直接通过 / 驳回 / 退回
+    alt 决定 = REJECT / RETURN_FOR_SUPPLEMENT
+      Controller -> Controller: REJECT → REJECTED\nRETURN → PENDING_SUPPLEMENT
+    else 决定 = APPROVE
+      Controller -> Controller: 复核冲突后 → ACTIVE\n生成签到凭证
+    end
+    Controller -> Repo: saveDecision(status, approvalLog, outbox)
+    Repo -> DB: UPDATE reservation\nINSERT approval_log\nINSERT notification_outbox\nCOMMIT
+    DB --> Repo: committed
+    Repo --> Controller: updated + newVersion
+    Controller --> UI: 200 OK\nresult + newVersion
+    UI --> Admin: 更新待办
+  end
+
+  Note over Notify, DB: 提交后投递审批结果通知；\n外部通知失败不回滚审批
+end
+@enduml
