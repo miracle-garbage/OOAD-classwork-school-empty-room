@@ -1,0 +1,96 @@
+@startuml 包图-校园空教室预约管理系统
+' ============================================================
+' 系统分析 · 逻辑包图（Package Diagram）
+' 系统：校园空教室预约管理系统（CFRMS）
+' 说明：表达包的职责、分层与依赖方向；
+'       图中的包是逻辑模块，不对应当前仓库的文档目录。
+' ============================================================
+title 图 2-7  校园空教室预约管理系统 · 逻辑包图
+skinparam defaultFontName "Noto Sans CJK SC"
+skinparam shadowing false
+skinparam packageStyle rectangle
+skinparam nodesep 26
+skinparam ranksep 48
+skinparam ArrowColor #495057
+skinparam ArrowFontColor #343A40
+skinparam ArrowFontSize 12
+top to bottom direction
+
+package "表现层\nPresentation" as UI <<layer>> #EAF6EE {
+  package "用户端界面" as UI_USER
+  package "管理端界面" as UI_ADMIN
+  package "Web API / 任务入口" as UI_ENTRY
+}
+
+package "应用层\nApplication" as APP <<layer>> #FFF6E6 {
+  package "身份认证与空教室查询" as APP_ACCESS
+  package "预约、审批与变更" as APP_RESERVATION
+  package "签到、释放与信用" as APP_USAGE
+  package "教室、权限与报表管理" as APP_ADMIN
+  package "应用端口\nApplication Ports" as APP_PORT <<interface>>
+}
+
+package "领域层\nDomain" as DOMAIN <<layer>> #EDF2FF {
+  package "共享内核\nShared Kernel" as DOM_SHARED
+  package "身份与权限\nIdentity" as DOM_IDENTITY
+  package "教室与课表资源\nClassroom" as DOM_CLASSROOM
+  package "预约与审批\nReservation" as DOM_RESERVATION
+  package "签到、信用与通知\nUsage" as DOM_USAGE
+}
+
+package "基础设施层\nInfrastructure" as INFRA <<layer>> #F3F0FF {
+  package "持久化与事务" as INFRA_PERSIST
+  package "外部系统适配" as INFRA_ADAPTER
+  package "Outbox 与消息投递" as INFRA_MESSAGE
+  package "任务调度与运行日志" as INFRA_JOBS
+}
+
+package "启动与配置\nBootstrap" as BOOT <<composition root>> #F1F3F5 {
+  package "依赖注入与模块装配" as BOOT_WIRING
+  package "配置、密钥与时钟" as BOOT_CONFIG
+}
+
+package "外部系统与资源\nExternal" as EXT #F8F9FA {
+  package "统一身份认证平台" as EXT_SSO
+  package "教务排课系统" as EXT_SCHEDULE
+  package "消息推送服务" as EXT_NOTIFY
+  package "对象存储" as EXT_STORAGE
+  package "关系数据库" as EXT_DATABASE
+}
+
+' ---------- 分层依赖（子包级细节见设计文档表格） ----------
+UI ..> APP : 调用公开用例服务
+APP ..> DOMAIN : 使用领域模型与规则
+APP_PORT ..> DOMAIN : 只依赖领域抽象
+INFRA ..> APP_PORT : 实现应用端口
+INFRA ..> EXT : 通过适配器访问
+
+' ---------- 组合根在运行时装配 ----------
+BOOT_WIRING ..> UI : 装配
+BOOT_WIRING ..> APP : 装配
+BOOT_WIRING ..> INFRA : 装配
+BOOT_CONFIG ..> INFRA : 配置 / 时钟
+
+note right of APP_PORT
+  应用层只声明所需端口；
+  基础设施实现端口，
+  由启动与配置包在运行时装配。
+  业务代码不得直接依赖第三方 SDK。
+end note
+
+note bottom of DOMAIN
+  依赖规则：外层可依赖内层；
+  领域层不得反向依赖应用层、基础设施层或表现层。
+  应用模块之间只通过公开用例服务协作，不访问彼此内部实现。
+end note
+
+legend right
+  «layer» 逻辑分层包
+  «interface» 应用端口集合
+  «composition root» 运行时模块装配
+  ---
+  虚线箭头 = 使用 / 实现 / 装配依赖
+  箭头指向被调用或被实现的包
+  外部系统只能由基础设施层适配器访问
+endlegend
+@enduml
