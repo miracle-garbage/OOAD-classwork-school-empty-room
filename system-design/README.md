@@ -1,6 +1,6 @@
-# 校园空教室预约管理系统 · 系统分析（包图、接口与顺序图）
+# 校园空教室预约管理系统 · 系统分析与问题域设计（包图、接口、顺序图、OOD）
 
-本目录承接 `../user-case-analysis/` 与 `../class-analysis/`，是系统分析的后续模型部分。内容包括系统逻辑包图、分层依赖规则、接口契约和 4 张核心顺序图，对应报告第 2.3～2.5 节。系统设计部分暂留空，待后续补充。
+本目录承接 `../user-case-analysis/` 与 `../class-analysis/`。前半部分是系统分析模型：系统逻辑包图、分层依赖规则、接口契约和 4 张核心顺序图，对应报告第 2.3～2.5 节；后半部分是系统设计中的核心问题域 OOD 建模，对应报告 3.1 节。
 
 ## 交付内容
 
@@ -9,18 +9,20 @@
 | 包图模型 | `系统设计与包图.md` 第 2 节：逻辑包图、包职责、依赖约束与用况追溯；源文件为 `diagrams/package-diagram.puml` |
 | 接口设计 | `接口与顺序图设计.md` 第 1 节：REST 接口、请求 / 响应、错误码、幂等、并发与内部端口 |
 | 顺序图 | `接口与顺序图设计.md` 第 2 节；`diagrams/sequence-*.puml` 与已导出的 PNG / SVG |
+| 问题域 OOD | `问题域设计.md`：OOD 修改、核心问题域设计类图、类间关系调整与 OOA → OOD 映射表 |
 
 ## 文档与图号
 
-| 编号 | 用况 | 源文件 |
+| 编号 | 内容 | 源文件 |
 | --- | --- | --- |
 | 图 2-7 | 系统逻辑包图 | `diagrams/package-diagram.puml` |
 | 图 2-8 | UC-03 提交预约申请 | `diagrams/sequence-uc03-submit-reservation.puml` |
 | 图 2-9 | UC-06 审批预约申请 | `diagrams/sequence-uc06-approve-request.puml` |
 | 图 2-10 | UC-10 签到核验 | `diagrams/sequence-uc10-check-in.puml` |
 | 图 2-11 | UC-11 超时未签到自动释放 | `diagrams/sequence-uc11-auto-release.puml` |
+| 图 3-1 | 核心问题域 OOD 设计类图 | `diagrams/class-diagram-ood-domain.puml` |
 
-建议阅读顺序：先看 `系统设计与包图.md` 的包边界与依赖规则，再看 `接口与顺序图设计.md` 的接口契约和核心交互。
+建议阅读顺序：先看 `系统设计与包图.md` 的包边界与依赖规则，再看 `接口与顺序图设计.md` 的接口契约和核心交互；最后看 `问题域设计.md`，了解领域类在 OOD 阶段如何收敛职责、补齐设计信息，并完成 OOA → OOD 的逐类映射。
 
 ## 重新渲染
 
@@ -31,9 +33,17 @@ java -jar class-analysis/tools/plantuml.jar -charset UTF-8 -tpng -o png system-d
 java -jar class-analysis/tools/plantuml.jar -charset UTF-8 -tsvg -o svg system-design/diagrams/package-diagram.puml
 java -jar class-analysis/tools/plantuml.jar -charset UTF-8 -tpng -o png system-design/diagrams/sequence-*.puml
 java -jar class-analysis/tools/plantuml.jar -charset UTF-8 -tsvg -o svg system-design/diagrams/sequence-*.puml
+
+# 图 3-1：Graphviz dot 布局 + linetype ortho
+java -jar class-analysis/tools/plantuml.jar \
+  -charset UTF-8 \
+  -tpng -o png system-design/diagrams/class-diagram-ood-domain.puml
+java -jar class-analysis/tools/plantuml.jar \
+  -charset UTF-8 \
+  -tsvg -o svg system-design/diagrams/class-diagram-ood-domain.puml
 ```
 
-包图依赖 Graphviz 的 `dot`；没有 Graphviz 时可对包图追加 `-Playout=smetana` 使用 PlantUML 内置布局。顺序图与包图的字体使用 `Noto Sans CJK SC`，避免中文在 PNG / SVG 中显示为方块。
+图 3-1 使用 Graphviz 的 `dot` 布局和 `skinparam linetype ortho` 正交走线；没有 Graphviz 时可追加 `-Playout=smetana` 作为后备，但布局会不同。顺序图、包图与 OOD 类图的字体使用 `Noto Sans CJK SC`，避免中文在 PNG / SVG 中显示为方块。
 
 ## 文件清单
 
@@ -41,8 +51,10 @@ java -jar class-analysis/tools/plantuml.jar -charset UTF-8 -tsvg -o svg system-d
 | --- | --- |
 | `系统设计与包图.md` | 系统分析模型主文档：包图、分层规则、端口、用况追溯与建模取舍 |
 | `接口与顺序图设计.md` | 接口契约、错误码、内部端口和 4 张核心顺序图 |
+| `问题域设计.md` | 系统设计 3.1 节：OOD 修改、核心问题域设计类图、关系调整、状态迁移与 OOA → OOD 映射表 |
 | `diagrams/package-diagram.puml` | 图 2-7 包图源文件 |
 | `diagrams/sequence-*.puml` | 图 2-8～2-11 顺序图源文件 |
+| `diagrams/class-diagram-ood-domain.puml` | 图 3-1 核心问题域 OOD 设计类图源文件 |
 | `diagrams/png/*.png` | 已导出的位图，可直接插入 Word / PPT |
 | `diagrams/svg/*.svg` | 已导出的矢量图，排版放大不失真 |
 

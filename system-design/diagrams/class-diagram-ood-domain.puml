@@ -1,0 +1,325 @@
+@startuml 类图-问题域OOD设计类图
+' ============================================================
+' 系统设计 · 核心问题域 OOD 设计类图（Design Class Diagram）
+' 系统：校园空教室预约管理系统（CFRMS）
+' 说明：在 OOA 领域实体类图基础上，补充可见性、类型、导航性、
+'       设计级值对象与支撑类，并收敛实体职责。
+' 布局：Graphviz dot + skinparam linetype ortho（正交走线）
+' ============================================================
+title 图 3-1  校园空教室预约管理系统 · 核心问题域 OOD 设计类图
+skinparam defaultFontName "Noto Sans CJK SC"
+skinparam shadowing false
+skinparam classAttributeIconSize 0
+skinparam nodesep 36
+skinparam ranksep 52
+skinparam packageStyle rectangle
+' 正交走线：减少斜线交叉，便于阅读跨子包关联
+skinparam linetype ortho
+hide circle
+top to bottom direction
+
+package "共享内核 DOM_SHARED" #EDF2FF {
+  class "日期时段" as DateSlot <<值对象>> {
+    - 日期 : LocalDate
+    - 开始时间 : LocalTime
+    - 结束时间 : LocalTime
+    + 时长() : Duration
+    + 是否重叠(其他 : 日期时段) : boolean
+    + 是否合法() : boolean
+    + 包含(时刻 : Instant) : boolean
+  }
+
+  class "每周时段" as WeeklySlot <<值对象>> {
+    - 星期 : DayOfWeek
+    - 开始时间 : LocalTime
+    - 结束时间 : LocalTime
+    + 覆盖(日期 : LocalDate, 时段 : 日期时段) : boolean
+    + 是否合法() : boolean
+  }
+
+  enum "用途类别" as Purpose {
+    自习
+    小组讨论
+    补课
+    答疑
+    会议
+    社团活动
+    --
+    + 是否需要审批() : boolean
+    + 是否需要材料() : boolean
+    + 最早提前量() : Duration
+  }
+
+  enum "预约状态" as ReservationStatus {
+    PENDING_APPROVAL
+    PENDING_SUPPLEMENT
+    ACTIVE
+    IN_USE
+    COMPLETED
+    CANCELLED
+    REJECTED
+    AUTO_RELEASED
+  }
+
+  enum "身份类型" as IdentityType {
+    STUDENT
+    TEACHER
+    CLASSROOM_ADMIN
+    SYSTEM_ADMIN
+    ACADEMIC_STAFF
+  }
+
+  class "校验结果" as ValidationResult <<值对象>> {
+    - 是否通过 : boolean
+    - 违规项 : String[]
+    + 是否通过() : boolean
+    + 违规项() : String[]
+  }
+}
+
+package "身份与权限 DOM_IDENTITY" #EAF6EE {
+  abstract class "用户" as User {
+    - 用户编号 : UUID
+    - 姓名 : String
+    - 身份类型 : 身份类型
+    - 所属院系 : String
+    - 联系电话 : String
+    - 账号状态 : 账号状态
+    + 是否启用() : boolean
+  }
+
+  abstract class "预约用户" as ReservationUser {
+    + 是否受预约限制(now : Instant) : boolean
+  }
+
+  class "学生" as Student {
+    - 学号 : String
+    - 年级 : String
+  }
+
+  class "教师" as Teacher {
+    - 工号 : String
+    - 职称 : String
+  }
+
+  class "教室管理员" as ClassroomAdmin {
+    - 管理楼栋 : String[]
+  }
+
+  class "系统管理员" as SystemAdmin {
+    - 管理范围 : String
+  }
+
+  class "教务管理人员" as AcademicStaff {
+    - 所属科室 : String
+  }
+
+  class "角色" as Role {
+    - 角色编号 : UUID
+    - 角色名称 : String
+    + 包含权限(权限 : 权限) : boolean
+  }
+
+  class "权限" as Permission {
+    - 权限编号 : UUID
+    - 权限码 : String
+    - 资源 : String
+    - 操作 : String
+  }
+
+  class "登录日志" as LoginLog {
+    - 日志号 : UUID
+    - 登录时间 : Instant
+    - 来源IP : String
+    - 登录方式 : String
+    - 结果 : String
+  }
+}
+
+package "教室与课表资源 DOM_CLASSROOM" #FFF6E6 {
+  class "教室" as Classroom {
+    - 教室编号 : UUID
+    - 楼栋 : String
+    - 房间号 : String
+    - 容量 : int
+    - 教室类型 : 教室类型
+    - 状态 : 教室状态
+    - 是否可预约 : boolean
+    - 是否需审批 : boolean
+    + 是否满足容量(人数 : int) : boolean
+    + 可预约(时段 : 日期时段) : boolean
+  }
+
+  class "教室设备" as Equipment {
+    - 设备编号 : UUID
+    - 设备名称 : String
+    - 设备类型 : String
+    - 数量 : int
+  }
+
+  class "开放时间规则" as OpeningRule {
+    - 规则号 : UUID
+    - 生效学期 : String
+    - 是否可预约 : boolean
+    + 覆盖(日期 : LocalDate, 时段 : 日期时段) : boolean
+  }
+
+  class "课表占用" as ScheduleOccupancy {
+    - 占用号 : UUID
+    - 课程名称 : String
+    - 任课教师 : String
+  }
+}
+
+package "预约与审批 DOM_RESERVATION" #F3F0FF {
+  class "预约" as Reservation {
+    - 预约号 : UUID
+    - 使用人数 : int
+    - 联系电话 : String
+    - 状态 : 预约状态
+    - 提交时间 : Instant
+    - 是否需审批 : boolean
+    - 版本号 : long
+    + 提交(now : Instant)
+    + 审批通过(now : Instant)
+    + 驳回(理由 : String, now : Instant)
+    + 退回补充(理由 : String, now : Instant)
+    + 取消(now : Instant) : boolean
+    + 变更(新教室 : 教室, 新时段 : 日期时段, now : Instant)
+    + 标记签到(now : Instant)
+    + 超时释放(now : Instant) : boolean
+    + 是否可取消(now : Instant) : boolean
+    + 是否需要审批() : boolean
+  }
+
+  class "预约凭证" as Credential <<值对象>> {
+    - 签到码 : String
+    - 签到时间窗 : 日期时段
+    - 教室编号 : UUID
+    + 校验(码 : String, 教室编号 : UUID, now : Instant) : boolean
+  }
+
+  class "审批日志" as ApprovalLog {
+    - 日志号 : UUID
+    - 审批人 : String
+    - 审批时间 : Instant
+    - 结论 : 审批结论
+    - 理由 : String
+    - 是否调整资源 : boolean
+  }
+
+  class "证明材料" as Material {
+    - 材料号 : UUID
+    - 文件名 : String
+    - 上传时间 : Instant
+  }
+}
+
+package "签到、信用与通知 DOM_USAGE" #F1F3F5 {
+  class "签到记录" as CheckIn {
+    - 记录号 : UUID
+    - 签到时间 : Instant
+    - 签到方式 : 签到方式
+    - 是否代签 : boolean
+    - 代签操作人 : String
+    - 原因 : String
+  }
+
+  class "违约记录" as Violation {
+    - 记录号 : UUID
+    - 违约类型 : 违约类型
+    - 发生时间 : Instant
+    - 是否撤销 : boolean
+    + 撤销(理由 : String, now : Instant)
+  }
+
+  class "信用信息" as CreditInfo {
+    - 违约累计 : int
+    - 信用状态 : 信用状态
+    - 限制起始 : Instant
+    - 限制截止 : Instant
+    + 记录违约(违约 : 违约记录, now : Instant)
+    + 重算(有效违约数 : int, now : Instant)
+    + 是否受限(now : Instant) : boolean
+  }
+
+  class "通知" as Notification {
+    - 通知号 : UUID
+    - 通知类型 : 通知类型
+    - 内容 : String
+    - 渠道 : 通知渠道
+    - 状态 : 发送状态
+    - 重试次数 : int
+    + 标记已发送(now : Instant)
+    + 标记失败(错误 : String)
+  }
+}
+
+' ============================================================
+' 泛化
+' ============================================================
+User <|-- ReservationUser
+User <|-- ClassroomAdmin
+User <|-- SystemAdmin
+User <|-- AcademicStaff
+ReservationUser <|-- Student
+ReservationUser <|-- Teacher
+
+' ============================================================
+' 关联 / 聚合 / 组合（含多重度与导航性）
+' ============================================================
+User "1..*" -- "0..*" Role : 拥有
+Role "1..*" -- "0..*" Permission : 包含
+User "1" -- "0..*" LoginLog : 产生
+
+Classroom "1" *-- "0..*" Equipment : 配置
+Classroom "0..*" -- "0..*" OpeningRule : 适用
+Classroom "1" -- "0..*" ScheduleOccupancy : 被占用
+
+Reservation "0..*" --> "1" ReservationUser : 提交人
+Reservation "0..*" --> "1" Classroom : 使用
+Reservation "1" *-- "1" DateSlot : 占用
+Reservation "1" --> "1" Purpose : 分类
+Reservation "1" *-- "1" Credential : 生成
+Reservation "1" -- "0..*" Material : 附有
+Reservation "1" -- "0..*" ApprovalLog : 留有
+
+CheckIn "0..1" --> "1" Reservation : 对应
+Violation "0..*" --> "1" Reservation : 触发
+Notification "0..*" --> "1" Reservation : 触发
+Violation "0..*" --> "1" ReservationUser : 归属
+CreditInfo "0..1" --> "1" ReservationUser : 属于
+CreditInfo "1" -- "0..*" Violation : 汇总
+Notification "0..*" --> "1" User : 接收人
+
+OpeningRule "1" *-- "1" WeeklySlot : 定义
+ScheduleOccupancy "1" *-- "1" DateSlot : 对应
+
+' ============================================================
+' 图外设计支撑类说明
+' ============================================================
+note bottom of ValidationResult
+  本图只展开核心问题域的设计类。
+  图外设计支撑类（由基础设施层实现）：
+  幂等记录、Outbox 事件、任务运行日志、系统参数、
+  预约仓储、通知端口等，用于支撑 NFR-02 / NFR-06 / NFR-07。
+end note
+
+note bottom of Purpose
+  未在图中展开的枚举：
+  账号状态、信用状态、教室类型、教室状态、
+  签到方式、审批结论、违约类型、
+  通知类型、通知渠道、发送状态。
+end note
+
+legend right
+  «值对象» 无独立标识、按值相等
+  ---
+  实线 + 空心三角 = 泛化
+  实线 = 同包关联 / 聚合 / 组合
+  实线箭头 = 跨包导航关联
+  空心菱形 = 聚合，实心菱形 = 组合
+  跨包关联从依赖方指向被依赖方
+endlegend
+
+@enduml
